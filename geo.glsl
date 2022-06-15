@@ -3,6 +3,11 @@
 layout (points) in;
 layout (triangle_strip, max_vertices = 4) out;
 
+uniform float baseFreq;
+uniform float gain;
+uniform float persistance;
+uniform int octaveCount;
+
 out vec4 fragWorldPosG;
 out vec3 fragWorldNorG;
 out float maxHeight;
@@ -64,7 +69,7 @@ float perlin2d(vec2 p)
 	float cRightTop = getContribution(i+1, j+1, p);
 	float cRightBottom = getContribution(i+1, j, p);
 
-	return (cLeftBottom + cLeftTop+ cRightBottom + cRightTop + 1) / 2.0f;
+	return ((cLeftBottom + cLeftTop+ cRightBottom + cRightTop + 1) / 2.0f) * gs_in[0].heightFactor;
 }
 
 float fBmPerlin2d(vec2 p, int octaveCount, float gain, float persistance)
@@ -73,13 +78,17 @@ float fBmPerlin2d(vec2 p, int octaveCount, float gain, float persistance)
 	float amp = 1.0f;
 	float freq = 1.0f;
 
+	float totalContr = 0.0f;
+
 	for(int i=0; i < octaveCount; i++)
 	{
 		sum += perlin2d(p * freq) * amp;
 		freq *= gain;
+
+		totalContr += amp;
 		amp *= persistance;
 	}
-	return sum/float(octaveCount);
+	return sum/totalContr;
 }
 
 void computePositionAndSetOutputs(vec4 offset);
@@ -115,9 +124,9 @@ void computePositionAndSetOutputs(vec4 offset)
 {
 	vec4 wpos = gs_in[0].fragWorldPos + offset;
 	// 4oct 2gain 0.5pers -> nice mountains
-	float noise = fBmPerlin2d(wpos.xz * 0.25f, 5, 1.4f, 0.35f);
+	float noise = fBmPerlin2d(wpos.xz * baseFreq, octaveCount, gain, persistance);
 	//float noise = perlin2d(wpos.xz * 0.25f);
-	wpos.y = noise * gs_in[0].heightFactor;
+	wpos.y = noise;//* gs_in[0].heightFactor;
 
 	gl_Position = gs_in[0].projection * gs_in[0].viewing * wpos;
 	fragWorldPosG = wpos;

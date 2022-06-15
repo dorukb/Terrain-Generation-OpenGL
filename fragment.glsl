@@ -1,10 +1,6 @@
 #version 460 core
 
 vec3 I = vec3(2, 2, 2);          // point light intensity
-vec3 Iamb = vec3(0.8, 0.8, 0.8); // ambient light intensity
-vec3 kd = vec3(1, 0.2, 0.2);     // diffuse reflectance coefficient
-vec3 ka = vec3(0.3, 0.3, 0.3);   // ambient reflectance coefficient
-vec3 ks = vec3(0.8, 0.8, 0.8);   // specular reflectance coefficient
 vec3 lightPos = vec3(0, 50, 0);   // light position in world coordinates
 
 uniform vec3 eyePos;
@@ -16,7 +12,6 @@ in float maxHeight;
 out vec4 fragColor;
 
 void useCustomColorMap(float height);
-vec4 getPhongShadedColor();
 
 float rainbow[768] = {
 	0.984314, 0, 1,
@@ -279,11 +274,8 @@ float rainbow[768] = {
 
 void main(void)
 {
-
-	//fragColor = getPhongShadedColor();
-	//useCustomColorMap(fragWorldPosG.y);
-	float initialHeight = 15f;
-	int mappedRow= int(clamp(fragWorldPosG.y / initialHeight, 0, 1) * 255);
+	float clampHeight  = 5.0 * 0.85f;
+	int mappedRow= int(clamp(fragWorldPosG.y / clampHeight, 0, 1) * 255);
 	//int mappedRow= int((fragWorldPosG.y / maxHeight) * 255);
 	int startIndex = mappedRow * 3;
 
@@ -293,29 +285,8 @@ void main(void)
 	float NdotL = dot(N, L); // for diffuse component
 	
 	vec3 diffuseColor = I * baseColor * max(0, NdotL);
-	//fragColor = vec4(rainbow[startIndex], rainbow[startIndex+1], rainbow[startIndex+2], 1.0);
 	fragColor = vec4(diffuseColor, 1.0);
 
-}
-
-vec4 getPhongShadedColor()
-{	
-// Compute lighting. We assume lightPos and eyePos are in world
-	// coordinates. fragWorldPos and fragWorldNor are the interpolated
-	// coordinates by the rasterizer.
-	
-	vec3 L = normalize(lightPos - vec3(fragWorldPosG));
-	vec3 V = normalize(eyePos - vec3(fragWorldPosG));
-	vec3 H = normalize(L + V);
-	vec3 N = normalize(fragWorldNorG);
-
-	float NdotL = dot(N, L); // for diffuse component
-	float NdotH = dot(N, H); // for specular component
-
-	vec3 diffuseColor = I * kd * max(0, NdotL);
-	vec3 specularColor = I * ks * pow(max(0, NdotH), 100);
-	vec3 ambientColor = Iamb * ka;
-	return vec4(diffuseColor + specularColor + ambientColor, 1);
 }
 
 void useCustomColorMap(float height)

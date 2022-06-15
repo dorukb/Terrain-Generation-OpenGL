@@ -139,20 +139,29 @@ float terrainStartingPoint[] = {
 };
 
 // Shader parameters
-GLuint heightLoc, widthLoc, sampleCountLoc;
+GLuint heightLoc, widthLoc, sampleCountLoc, gainLoc, persistanceLoc, baseFreqLoc, octaveCountLoc;
 
 // user parameters
-float heightFactorStepsize = 1.5f;
-float speedIncrement = 0.2f;
+float heightFactorStepsize = 0.5f;
+float speedIncrement = 0.5f;
 
 int widthParam = 30;
 int sampleCount = 1000;
-float heightFactor = 14.7f;
+float heightFactor = 5.0f;
 bool isWireframe = false;
+float heightOffset = 0.5f; // Camera should always be _heightOffset_ above the terrain.
 
+// noise settings
+float baseFreq = 0.25f;
+int octaveCount = 3;
+float gain = 1.3f;
+float persistance = 0.25f;
 
+// movement
 float cameraSpeed = 0.0f;
 float scaledSpeed = 0.0f;
+
+bool debug = true;
 
 bool ParseObj(const string& fileName, vector<Texture>& textures, vector<Normal>& normals, vector<Vertex>& vertices, vector<Face>& faces)
 {
@@ -278,7 +287,7 @@ bool ReadDataFromFile(
     return true;
 }
 
-GLuint createShader(const char* shaderName, ShaderType type) 
+GLuint createShader(const char* shaderName, ShaderType type)
 {
     string shaderSource;
     string filename(shaderName);
@@ -294,17 +303,17 @@ GLuint createShader(const char* shaderName, ShaderType type)
     GLuint vs;
     string debugName = "";
 
-    if (type == VERTEX) 
+    if (type == VERTEX)
     {
         vs = glCreateShader(GL_VERTEX_SHADER);
         debugName = "Vertex shader";
     }
-    else if (type == FRAGMENT) 
+    else if (type == FRAGMENT)
     {
         vs = glCreateShader(GL_FRAGMENT_SHADER);
         debugName = "Fragment Shader";
     }
-    else if (type == GEOMETRY) 
+    else if (type == GEOMETRY)
     {
         vs = glCreateShader(GL_GEOMETRY_SHADER);
         debugName = "Geometry shader";
@@ -340,7 +349,7 @@ void initShaders()
     glGetProgramiv(gProgram[0], GL_LINK_STATUS, &status);
     if (status != GL_TRUE)
     {
-        cout << "Program link failed. status:" << status<< endl;
+        cout << "Program link failed. status:" << status << endl;
         exit(-1);
     }
 
@@ -377,6 +386,11 @@ void init()
     widthLoc = glGetUniformLocation(gProgram[0], "widthParam");
     sampleCountLoc = glGetUniformLocation(gProgram[0], "sampleCount");
 
+    baseFreqLoc = glGetUniformLocation(gProgram[0], "baseFreq");
+    gainLoc = glGetUniformLocation(gProgram[0], "gainLoc");
+    octaveCountLoc = glGetUniformLocation(gProgram[0], "octaveCount");
+    persistanceLoc = glGetUniformLocation(gProgram[0], "persistance");
+
     // use actual camera setup determined via user interaction.
     viewingMatrix = glm::lookAt(cameraPos, cameraPos + cameraGaze, cameraUp);
     glViewport(0, 0, gWidth, gHeight); // reset viewport and projection to actual values.
@@ -392,17 +406,18 @@ void display()
 
     float currentFrame = glfwGetTime();
     deltaTime = currentFrame - lastFrame;
+    //cout << "deltaTime: " << deltaTime << endl;
+
     lastFrame = currentFrame;
     scaledSpeed = cameraSpeed * deltaTime;
-
     //printFps();
     clearScreen();
 
-    vec3 moveVector(cameraGaze.x, 0.0f, cameraGaze.z);
-    cameraPos += cameraSpeed * moveVector * deltaTime;
 
     computeCameraHeight();
 
+    vec3 moveVector(cameraGaze.x, 0.0f, cameraGaze.z);
+    cameraPos += scaledSpeed * moveVector;
 
     viewingMatrix = glm::lookAt(cameraPos, cameraPos + cameraGaze, cameraUp);
     modelingMatrix = glm::mat4(1.0f);
@@ -418,6 +433,10 @@ void display()
     glUniform1i(widthLoc, widthParam);
     glUniform1i(sampleCountLoc, sampleCount);
 
+    glUniform1f(baseFreqLoc, baseFreq);
+    glUniform1f(gainLoc, gain);
+    glUniform1f(persistanceLoc, persistance);
+    glUniform1i(octaveCountLoc, octaveCount);
 
     GLuint terrainVBO;
     glGenVertexArrays(1, &terrainVAO);
@@ -428,90 +447,51 @@ void display()
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
 
-    //glDrawArrays(GL_POINTS, 0, 3);
-    glDrawArraysInstanced(GL_POINTS, 0, 1, sampleCount* sampleCount);
+    glDrawArraysInstanced(GL_POINTS, 0, 1, sampleCount * sampleCount);
 }
-int frameCount = 0;
-int stopFrame = 10;
+void computeCameraHeight()
+{
+    float nudgeAmount = 0.2f;
+    float heightAtCameraPos = fBmPerlin2d(vec2(cameraPos.x, cameraPos.z) * baseFreq, octaveCount, gain, persistance) * heightFactor;
 
-void computeCameraHeight() {
-
-  /*  if (frameCount >= stopFrame)return;
-    else {
-        frameCount++;
-    }*/
-
-    float nudgeAmount = 0.1f;
-
-    float heightOffset = 1.0f; // Camera should always be 1 unit above the terrain.
-    float baseFreq = 0.25f;
-    int octaves = 5;
-    float gain = 1.4f;
-    float persistance = 0.35f;
-
-    float heightAtCameraPos = fBmPerlin2d(vec2(cameraPos.x, cameraPos.z) * baseFreq, octaves, gain, persistance) * heightFactor;
-    cout << "Camera height: " << heightAtCameraPos << endl;
+    vec3 oldPos = cameraPos;
 
     vec3 p0 = cameraPos;
     p0.y = heightAtCameraPos;
 
+    if (abs(cameraSpeed) < 0.001f) {
+        cameraPos.y = heightAtCameraPos + heightOffset;
+        return;
+    }
     //// assume moving forward in gaze direction
     glm::vec3 cameraRight = normalize(cross(cameraGaze, cameraUp));
+    vec3 test(cameraGaze.x, 0.0f, cameraGaze.z);
+    vec3 testr(cameraRight.x, 0.0f, cameraRight.z);
 
-    glm::vec3 p1 = p0 + cameraGaze * nudgeAmount * deltaTime;
-    glm::vec3 p2 = p1 + cameraRight * nudgeAmount * deltaTime;
-    p1.y = fBmPerlin2d(vec2(p1.x, p1.z) * baseFreq, octaves, gain, persistance) * heightFactor;
-    p2.y = fBmPerlin2d(vec2(p2.x, p2.z) * baseFreq, octaves, gain, persistance) * heightFactor;
+    glm::vec3 p1 = p0 + test * nudgeAmount * deltaTime;
+    glm::vec3 p2 = p1 + testr * nudgeAmount * deltaTime;
+    p1.y = fBmPerlin2d(vec2(p1.x, p1.z) * baseFreq, octaveCount, gain, persistance) * heightFactor;
+    p2.y = fBmPerlin2d(vec2(p2.x, p2.z) * baseFreq, octaveCount, gain, persistance) * heightFactor;
 
-
-    cout << "P1: (" << p1.x << "," << p1.y << ',' << p1.z << ")" << " p2: (" << p2.x << ", " << p2.y << ',' << p2.z << ")" << endl;
-
-    vec3 normal = normalize(cross(p2 - p0,p1 - p0));
-    cout << "Surface normal: (" << normal.x << "," << normal.y << "," << normal.z << ")" << endl;
-
-    //// correct camera Y position,needs the normal.
-    //cameraPos = p0 + heightOffset * normal;
-    //cameraPos = p0;
-    cameraPos.y = heightAtCameraPos + 0.25f;
-
+    vec3 normal = normalize(cross(p2 - p0, p1 - p0));
+    if (normal.y < -0.01) {
+        normal = normalize(cross(p1 - p0, p2 - p0));
+        cout << "wrong normal!!" << endl;
+    }
+    // Set camera position and direction vectors.
+    cameraPos.y = heightAtCameraPos + heightOffset;
+    //cameraPos = oldPos + normal;
     cameraGaze = normalize(p1 - p0);
     cameraUp = normal;
 
-    cout << "[FINAL] pos: (" << cameraPos.x <<"," << cameraPos.y << ","<<cameraPos.z <<")" << endl;
-    cout << "[FINAL] UP: (" << cameraUp.x << "," << cameraUp.y << "," << cameraUp.z << ")" << endl;
-    cout << "[FINAL] Gaze: (" << cameraGaze.x << "," << cameraGaze.y << "," << cameraGaze.z << ")" << endl;
-
-    //int xmin = floor(cameraPos.x);
-    //int xmax = xmin + 1;
-
-    //int zmin = floor(cameraPos.z);
-    //int zmax = zmin + 1;
-
-    //// lower half triangle vertices
-    //glm::vec3 v0{
-    //    xmin, 0, zmin
-    //};
-    //glm::vec3 v1{
-    //    xmax, 0, zmin
-    //};
-    //glm::vec3 v2{
-    //    xmax, 0, zmax
-    //};
-    //// check if Camera is inside this triangle.
-    //// sample height of each vertex from noise
-    //// interpolate height at camera position, using barycentric coordinates.
-
-}
-ostream& operator<<(ostream& os, glm::vec3 v)
-{
-    os << "(";
-    for (int i = 0; i < v.length(); ++i) {
-        os << v[i];
-        if (i != v.length() - 1)
-            os << ", ";
+    debug = false;
+    if (debug) {
+        cout << "P1: (" << p1.x << "," << p1.y << ',' << p1.z << ")" << " p2: (" << p2.x << ", " << p2.y << ',' << p2.z << ")" << endl;
+        cout << "Surface normal: (" << normal.x << "," << normal.y << "," << normal.z << ")" << endl;
+        cout << "[FINAL] pos: (" << cameraPos.x << "," << cameraPos.y << "," << cameraPos.z << ")" << endl;
+        cout << "[FINAL] UP: (" << cameraUp.x << "," << cameraUp.y << "," << cameraUp.z << ")" << endl;
+        cout << "[FINAL] Gaze: (" << cameraGaze.x << "," << cameraGaze.y << "," << cameraGaze.z << ")" << endl;
     }
-    os << ")\n";
-    return os;
 }
 // Compute barycentric coordinates (u, v, w) for
 // point p with respect to triangle (a, b, c)
@@ -586,14 +566,16 @@ float fBmPerlin2d(vec2 p, int octaveCount, float gain, float persistance)
     float sum = 0.0f;
     float amp = 1.0f;
     float freq = 1.0f;
+    float totalContr = 0.0f;
 
     for (int i = 0; i < octaveCount; i++)
     {
         sum += perlin2d(p * freq) * amp;
         freq *= gain;
+        totalContr += amp;
         amp *= persistance;
     }
-    return sum / float(octaveCount);
+    return sum / totalContr;
 }
 
 
@@ -659,10 +641,16 @@ void keyboard(GLFWwindow* window, int key, int scancode, int action, int mods)
         {
         case GLFW_KEY_W:
             cameraSpeed += speedIncrement;
+            if (abs(cameraSpeed) < 0.001) {
+                cameraSpeed = 0.0f;
+            }
             //cameraPos += scaledSpeed * cameraGaze;
             break;
         case GLFW_KEY_S:
             cameraSpeed -= speedIncrement;
+            if (abs(cameraSpeed) < 0.001) {
+                cameraSpeed = 0.0f;
+            }
             break;
         case GLFW_KEY_A:
             //cameraPos -= glm::normalize(glm::cross(cameraGaze, cameraUp)) * scaledSpeed;
@@ -671,15 +659,15 @@ void keyboard(GLFWwindow* window, int key, int scancode, int action, int mods)
             //cameraPos += glm::normalize(glm::cross(cameraGaze, cameraUp)) * scaledSpeed;
             break;
         case GLFW_KEY_Q: // Decrease terrain resolution.
-            if (sampleCount > 100) 
+            if (sampleCount > 100)
             {
                 sampleCount -= 100;
-                cout << "Terrain resolution is now: " << sampleCount << "x" << sampleCount <<" total vertices: "<< sampleCount * sampleCount<<endl;
+                cout << "Terrain resolution is now: " << sampleCount << "x" << sampleCount << " total vertices: " << sampleCount * sampleCount << endl;
             }
             break;
 
         case GLFW_KEY_E: // Increase terrain resolution.
-            sampleCount += 100; 
+            sampleCount += 100;
             cout << "Terrain resolution is now: " << sampleCount << "x" << sampleCount << " total vertices: " << sampleCount * sampleCount << endl;
             break;
 
@@ -703,12 +691,12 @@ void keyboard(GLFWwindow* window, int key, int scancode, int action, int mods)
             break;
 
         case GLFW_KEY_L: // Toggle render mode: Wireframe or Shaded
-            if (isWireframe) 
+            if (isWireframe)
             {
                 isWireframe = false;
                 glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             }
-            else 
+            else
             {
                 isWireframe = true;
                 glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -804,10 +792,10 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 
         float sensitivity = 0.1f;
         xoffset *= sensitivity;
-        yoffset *= sensitivity;
+        //yoffset *= sensitivity;
 
         mouseYaw += xoffset;
-        mousePitch += yoffset;
+        //mousePitch += yoffset;
 
         if (mousePitch > 89.0f)
             mousePitch = 89.0f;
@@ -818,7 +806,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
         direction.x = cos(glm::radians(mouseYaw)) * cos(glm::radians(mousePitch));
         direction.y = sin(glm::radians(mousePitch));
         direction.z = sin(glm::radians(mouseYaw)) * cos(glm::radians(mousePitch));
-        //cameraGaze = glm::normalize(direction);
+        cameraGaze = glm::normalize(direction);
     }
     else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
         firstTimeReceivingMouseInput = true;
